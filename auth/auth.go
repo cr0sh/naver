@@ -1,6 +1,6 @@
-// Package naver provides nid.naver.com authentication method.
+// Package auth provides nid.naver.com authentication method.
 // Auth logics are ported from https://github.com/HallaZzang/python-naverlogin.
-package naver
+package auth
 
 import (
 	"bytes"
@@ -21,43 +21,34 @@ import (
 // const userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/45.0.2454.85 Safari/537.36"
 const userAgent = "Opera/12.02 (Android 4.1; Linux; Opera Mobi/ADR-1111101157; U; en-US) Presto/2.9.201 Version/12.02"
 
-// AuthFailed indicates nid.naver.com returned the request with failure.
-type AuthFailed struct{}
+// Failed indicates nid.naver.com returned the request with failure.
+type Failed struct{}
 
 // Error implements error interface.
-func (err AuthFailed) Error() string {
+func (err Failed) Error() string {
 	return "Authentication failed"
 }
 
 // Auth tries to authenticate with given ID/password, with given *http.Client.
+//
 // If client is nil, it'll be set automatically to http.DefaultClient.
 // If client.Jar is nil, the jar will be set to new *cookiejar.Jar.
 func Auth(id string, passwd string, client *http.Client) error {
 	if client == nil {
 		client = http.DefaultClient
-		if client.Jar == nil {
-			jar, _ := cookiejar.New(nil)
-			client.Jar = jar
-		}
 	}
-	keyname, sesskey, n, e, err := GetKeys(client)
+
+	if client.Jar == nil {
+		jar, _ := cookiejar.New(nil)
+		client.Jar = jar
+	}
+
+	keyname, sesskey, e, n, err := getKeys(client)
 	if err != nil {
 		return err
 	}
 
-	bn := new(big.Int)
-	_, err = fmt.Sscanf(e, "%x", bn)
-	if err != nil {
-		return err
-	}
-	pubkey := &rsa.PublicKey{
-		N: bn,     // #blamenhn
-		E: int(n), // #blamenhn
-	}
-
-	toenc := string(byte(len(sesskey))) + sesskey + string(byte(len(id))) + id + string(byte(len(passwd))) + passwd
-	var enc []byte
-	enc, err = rsa.EncryptPKCS1v15(rand.Reader, pubkey, []byte(toenc))
+	enc, err := encodepw(sesskey, id, passwd, n, e)
 	if err != nil {
 		return err
 	}
@@ -82,10 +73,7 @@ func Auth(id string, passwd string, client *http.Client) error {
 		return err
 	}
 
-	req.Header.Add("User-Agent", userAgent)
-	req.Header.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	req.Header.Add("Accept-Language", "ko-KR,ko;q=0.8,en-US;q=0.5,en;q=0.3")
-	req.Header.Add("Accept-Encoding", "gzip, deflate")
+	decorateHeader(req)
 	req.Header.Add("Referer", "http://www.naver.com")
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 
@@ -100,10 +88,7 @@ func Auth(id string, passwd string, client *http.Client) error {
 		if err != nil {
 			return err
 		}
-		req.Header.Add("User-Agent", userAgent)
-		req.Header.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-		req.Header.Add("Accept-Language", "ko-KR,ko;q=0.8,en-US;q=0.5,en;q=0.3")
-		req.Header.Add("Accept-Encoding", "gzip, deflate")
+		decorateHeader(req)
 		req.Header.Add("Referer", "https://nid.naver.com/nidlogin.login")
 		resp, err = getResp(client, req)
 		if err != nil {
@@ -114,7 +99,7 @@ func Auth(id string, passwd string, client *http.Client) error {
 			return nil
 		}
 	}
-	return AuthFailed{}
+	return Failed{}
 }
 
 func getResp(c *http.Client, req *http.Request) (string, error) {
@@ -138,8 +123,7 @@ func getRedirect(html string) string {
 	return ""
 }
 
-// Get is a simple method to get HTTP response in string.
-func Get(url string, c *http.Client) (string, error) {
+func get(url string, c *http.Client) (string, error) {
 	resp, err := c.Get(url)
 	if err != nil {
 		return "", err
@@ -153,11 +137,9 @@ func Get(url string, c *http.Client) (string, error) {
 	return string(buf.Bytes()), nil
 }
 
-// GetKeys gets required data from Naver server for authentication, with given client.
-// You should not set c to nil, instead put http.DefaultClient.
-func GetKeys(c *http.Client) (keyname string, sessionKey string, nvalue int64, evalue string, err error) {
+func getKeys(c *http.Client) (keyname string, sessionKey string, nvalue int64, evalue string, err error) {
 	var script string
-	script, err = Get("http://static.nid.naver.com/loginv3/js/keys_js.nhn", c)
+	script, err = get("http://static.nid.naver.com/loginv3/js/keys_js.nhn", c)
 	if err != nil {
 		return
 	}
@@ -170,4 +152,27 @@ func GetKeys(c *http.Client) (keyname string, sessionKey string, nvalue int64, e
 	nvalue, err = strconv.ParseInt(strf[3][2], 16, 64)
 	evalue = strf[2][2]
 	return
+}
+
+func encodepw(sesskey, id, passwd, evalue string, nvalue int64) (enc []byte, err error) {
+	bn := new(big.Int)
+	_, err = fmt.Sscanf(evalue, "%x", bn)
+	if err != nil {
+		return
+	}
+	pubkey := &rsa.PublicKey{
+		N: bn,          // #blamenhn
+		E: int(nvalue), // #blamenhn
+	}
+
+	toenc := string(byte(len(sesskey))) + sesskey + string(byte(len(id))) + id + string(byte(len(passwd))) + passwd
+	enc, err = rsa.EncryptPKCS1v15(rand.Reader, pubkey, []byte(toenc))
+	return
+}
+
+func decorateHeader(req *http.Request) {
+	req.Header.Add("User-Agent", userAgent)
+	req.Header.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Add("Accept-Language", "ko-KR,ko;q=0.8,en-US;q=0.5,en;q=0.3")
+	req.Header.Add("Accept-Encoding", "gzip, deflate")
 }
