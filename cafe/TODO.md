@@ -1,0 +1,16 @@
+# To-do lists for cafe package
+- Parsers
+ - [ ] BoardList
+ - [ ] Board(ArticleList)
+ - [ ] Article
+ - [ ] Comment
+- Write/Modify/Delete actions
+ - [ ] Article
+ - [ ] Comment
+- Something useful
+ - [ ] Parse rankings
+ - [ ] Member information
+- Parse error scenarios
+ - [ ] Insufficient level
+ - [ ] Deleted article
+ - [ ] Private cafe
